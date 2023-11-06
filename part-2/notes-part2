@@ -1,0 +1,255 @@
+CS8395  HW2  Part 2 LLVM
+
+Your job is to modify the given starter code to create an LLVM pass
+that instruments a program with a stack canary check for each
+function. 
+
+
+LLVM is a powerful tool for analyzing and modifying programs.  It is
+used extensively in research and production analysis tools, and that
+frequently includes security analyses.  
+
+At its core, LLVM is part of a compiler toolchain (clang) that
+produces a robust "Intermediate Representation" (IR).  In Compiler
+Theory, an IR is a representation of a program that permits some
+analysis that is helpful for compilation.  For example, a parser
+produces an Abstract Syntax Tree of the program to verify that a given
+source code file contains syntactically valid source code.  
+
+We frequently work with an IR called a "Control Flow Graph" (CFG).
+You saw CFGs in part 1 of HW2.  This is a graph structure that
+represents how the CPU flows through instructions in the program.  For
+example, consider the function below:
+
+
+    void foo (int x) {
+        printf("Hello from foo.\n");
+
+        if (x < 5) {
+            x = x + 1;
+        } else {
+            x = x - 1;
+        }
+
+        printf("Goodbye from foo.\n");
+    }
+
+The foo function would have a CFG that looks like:
+
+
+        ENTRY
+          |
+        printf("Hello...");
+        if (x < 5)
+     /            \
+   true          false
+x = x + 1       x = x - 1
+     \            /
+        printf("Goodbye...");
+
+
+Each function in a program can be represented as a CFG.  Indeed, LLVM gives us
+access to Basic Blocks (nodes) in the CFG.  For this assignment, it will become
+necessary to add an if-then check to determine whether or not the stack canary
+has been changed before each function returns.  
+
+
+###############
+##
+##  Stack canaries
+##
+###############
+
+
+Recall from lecture we discussed how stack overflow attacks work.  An
+attacker controls a buffer in which they place malicious code to run.
+The attacker overwrites a saved return address that is placed on the
+stack when a function is first called.  One way of detecting stack
+overflow attacks is through the use of "stack canaries." Loosely, we
+place a known random value on the stack at the beginning of a
+function.  If an attacker smashes the stack, they will overwrite that
+stack canary.  Then, right before the function returns, we check if
+that stack canary's value has changed.  Unless the attacker knows the
+exact value we placed as the canary, we can tell if that value has
+been overwritten.
+
+
+In this job, your job is to write a tool that can automatically
+transform a given C program so that it contains code to generate and
+check stack canaries.  You will use LLVM to produce this tool.
+
+
+##############
+##
+##  LLVM 
+##
+##############
+
+
+In LLVM, you can create "passes" that run over a given input program.
+You will create a pass that, when applied to a given program,
+transforms all of the functions in that prgoram to contain code that
+creates and checks stack canaries. 
+
+
+First, you must install LLVM.  For this assignment, please use LLVM 13.
+
+On Kali, you can use
+
+sudo apt-get install llvm-13
+
+After installing it, there's a whole lot of code placed under
+/usr/lib/llvm-13/include/llvm
+
+If you ever need clarification on how to invoke a particular LLVM
+method, you can often grep through that directory.  For example,
+
+grep -r 'ReturnInst' /usr/lib/llvm-13/include/llvm
+
+
+
+###############
+##
+##  Getting Started, setup
+##
+###############
+
+First, ensure you have llvm 13 installed
+
+sudo apt-get install llvm-13
+
+You will also want to set the LLVM_DIR environment variable to point to LLVM's location.
+
+export LLVM_DIR=/usr/lib/llvm-13
+
+(you can add this to your ~/.bashrc file to ensure that gets set every time you start your VM). 
+
+
+
+
+
+In this package, there is starter code under the "pass" directory.  To
+build the LLVM pass, we use cmake.  Make sure you use
+-DLLVM_INSTALL_DIR=$LLVM_DIR so that cmake can pick up the LLVM
+installation.
+
+cd pass
+mkdir build
+cd build
+cmake -DLLVM_INSTALL_DIR=$LLVM_DIR ../
+make
+
+
+If the build is successful, it produces a file called pass/build/lib/libInstrumentFunctions.so.
+The .so file is your LLVM pass module.  We use it to automatically transform an input file. 
+
+
+To use the pass against an input file, we first create LLVM IR by using clang:
+
+clang -m32 -emit-llvm -S -fno-stack-protector -static  bof.c  -o  bof.ll
+
+
+This produces a file called bof.ll that contains the raw LLVM IR.
+This is similar to assembly code, but it is in a particular format
+that can be readily analyzed by LLVM passes and related tools.
+
+
+Once you have the LLVM IR, you can run the pass against it:
+
+$LLVM_DIR/bin/opt -load-pass-plugin ./pass/build/lib/libInstrumentFunctions.so --passes="cs8935-hw" bof.ll -S -o bof-instrumented.ll
+
+
+This produces a file that is transformed according to the pass tool
+you generate.  Once you have the instrumented LLVM IR, you can compile
+it:
+
+
+$LLVM_DIR/bin/llc -m32 bof-instrumented.ll
+clang -m32 -fno-stack-protector -static bof-instrumented.s -o bof-instrumented.o
+
+
+Finally, bof-instrumented is a normal program you can run directly:
+
+./bof-instrumented.o
+
+(or wrapped with ./invoke.sh as in HW1).
+
+
+
+
+#####
+##
+##  Writing the LLVM pass
+##
+#####
+
+
+You are given starter code that visits each function in a given
+progarm.  The starter code already emits instructions that create a
+new stack canary.  Your job is to complete the implementation by
+emitting code that checks the stack canary before the function
+returns. 
+
+The way LLVM works is by considering "instructions" in the IR.
+Instructions in LLVM can be things like add, subtract, compare, jump,
+branch, call, return, etc.  You can see how the starter code emits an
+instruction to allocate space for the new canary, then stores a
+randomly-generated value in that new space.  
+
+I will note that LLVM has a bit of a learning curve.  There are tons
+of instructions, methods, and types available throughout its codebase.
+My suggestion is to focus on the following keywords (documentation
+available via google):
+
+    - AllocaInst
+    - CreateLoad, CreateStore
+    - Instruction
+    - SplitBlockAndInsertIfThen (yes that's actually a function in LLVM)
+    - IRBuilder, SetInsertPoint
+
+You can start at the return instructions, then work to add code that
+checks if the value of the canary has been changed.  
+
+First, consider what the starter code already does.  At the top of each
+function, it uses an IRBuilder to create (1) an AllocaInst and (2) a
+StoreIntr.   In LLVM IR, programs allocate memory (like on the stack)
+by using an "Allocate" instruction.  In particular, we build a 32-bit
+Integer and allocate it on the stack.  Then, we store a
+randomly-initialized value in that newly-allocated space. 
+
+In addition, the starter code also places a printf call in the
+function which, at runtime, tells you the name of the function that is
+currently executed. 
+
+
+
+You must change the pass by modifying the starter code:
+./pass/lib/InstrumentFunctions.cpp.
+
+Read and understand how the starter code works, then implement your
+changes.   You must create a pass that:
+
+ - uses the stack canary already provided
+ - successfully transforms an input program so that it detects if the
+   stack canary has been changed _before_ it returns
+ - successfully transforms every function contained in the input
+   program. 
+
+
+You must provide a copy of your InstrumentFunctions.cpp file. 
+
+In addition, you must document in your writeup:
+
+    (1) How you implemented your solution.  What resources did you
+use? What parts of LLVM did you use?  How did you decide what to do
+for each step?
+
+    (2) What are the limitations of this approach to implementing
+stack canaries?  What could go wrong?  How would you compromise it?
+
+    (3) Now that you have an idea of the types of transformations LLVM
+is capable of performing, what other security analyses do you think
+are possible or useful?
+
+ 
+Good luck! 
