@@ -1,2 +1,2 @@
 # Ghidra/LLVM crackme
-[Report for crackme project](hw2 - ghidra-llvm.pdf)
+[Report for crackme project](ghidra-llvm.pdf)
